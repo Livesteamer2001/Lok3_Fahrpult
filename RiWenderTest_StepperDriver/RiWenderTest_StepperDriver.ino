@@ -11,11 +11,11 @@
 #define STEP 1
 #define SLEEP 2
 #define STOPPER_PIN 7
-#define RiWend_V = A6;    // Richtungswender für Vorwärts PD4
-#define RiWend_R = A5;   // Richtungswender für Rückwärts PF2
-#define Licht_V = A9;
-#define Licht_H = A11;
-#define Licht_F = 11;   // Fernlicht, digital
+#define RiWend_V  A6    // Richtungswender für Vorwärts PD4
+#define RiWend_R  A5   // Richtungswender für Rückwärts PF2
+#define Licht_V  A9
+#define Licht_H  A11
+#define Licht_F  11    // Fernlicht, digital
 
 // this variables will change
 int Li_V = 0;
@@ -29,25 +29,29 @@ int tFst = 0;                 // Variablen für Fahrschalterwerte
 char Fahrstufe = 'F';
 int L = 0;                    // Läuten
 int P = 0;                    // Pfeifen
-int stepPosition = 0;
+int stepPosition = 20;        // > 0, damit der Init-Vorgang geht
+unsigned long lastTX;
+unsigned long myTime;
+String stringTX = String(24);
 
 A4988 stepper(MOTOR_STEPS, DIR, STEP);
 
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(9600);
-  pinMode(11,INPUT_PULLUP);   // Fernlicht
-  pinMode(2, OUTPUT);         // Enable für Stepper und LED-Fahrschalter
+  pinMode(Licht_F,INPUT_PULLUP);   // Fernlicht
+  pinMode(SLEEP, OUTPUT);         // Enable für Stepper und LED-Fahrschalter
   pinMode(5, OUTPUT);         // Voltmeter, PWM  22V 24V -> 110, , 22V max 245
   pinMode(6, OUTPUT);         // Amperemeter, PWM 10A -> 45, 20A -> 90, 30A 
   pinMode(13, OUTPUT);        // Störmelder
   pinMode(10, OUTPUT);        // SS für CC1101
-  pinMode(0, OUTPUT);         // Stepper dir
-  pinMode(1, OUTPUT);         // Stepper step
+  pinMode(DIR, OUTPUT);         // Stepper dir
+  pinMode(STEP, OUTPUT);         // Stepper step
   pinMode(STOPPER_PIN, INPUT_PULLUP);   // Nullpunkt Tacho
   
    ELECHOUSE_cc1101.setSpiPin(15, 14, 16, 10);
     if (ELECHOUSE_cc1101.getCC1101()){      // Check the CC1101 Spi connection.
+       digitalWrite(SLEEP, HIGH);
        Serial.println("Connection OK");
        delay(500);
        digitalWrite(13, HIGH);
@@ -103,7 +107,7 @@ void loop() {
         stepper.stop();
         stepper.startMove(-10);
         stepPosition = 0;
-        digitalWrite(SLEEP, HIGH);
+        //digitalWrite(SLEEP, HIGH);
         stepper.setRPM(400);
     }
   // motor control loop - send pulse and return how long to wait until next pulse
@@ -115,7 +119,7 @@ void loop() {
     if (wait_time_micros > 100){
         Do_things();
     }
-    Serial.println(wait_time_micros);
+    //Serial.println(wait_time_micros);
 }
 
 void Do_things(){
@@ -125,15 +129,21 @@ void Do_things(){
           // Richtungswender bestimmen
           if ((tVal5 < 25) && (tVal6 < 25)) {
             RiWend = 'N'; 
-            digitalWrite(2, HIGH);
+            if (stepPosition == 0) {
+              digitalWrite(SLEEP, HIGH);
+            }
+            else
+            {
+              digitalWrite(SLEEP, LOW);
+            }
           }
           else if (tVal5 > 25) {
             RiWend = 'R';
-            digitalWrite(2, LOW);
+            digitalWrite(SLEEP, LOW);
           }
           else if (tVal6 > 25) {
             RiWend = 'V';
-            digitalWrite(2, LOW);
+            digitalWrite(SLEEP, LOW);
           }
         
           // Fahrschalter auslesen, wenn Richtungswender nicht N
@@ -144,18 +154,40 @@ void Do_things(){
           read_Licht();
         
           read_LP();
-        
+
+          // Nur alle 100ms senden
+          myTime = millis();
+          if ((myTime - lastTX) > 100) {
+            lastTX = myTime;
+            transmit();
+
+            //receive();
+
+             String stringout = "RiWend: ";
+            //stringout = stringout + RiWend + "  F: " + tVal4 + " " +tVal3 + " " + tVal2 + " " + tVal1 + " " + tVal0;
+            stringout = stringout + RiWend + "  F: " + Fahrstufe;
+            //Serial.println(stringout);
+          }
+          
+  
+          
           write_Voltmeter();
           write_Amperemeter();
         
           
           
-          String stringout = "RiWend: ";
-          //stringout = stringout + RiWend + "  F: " + tVal4 + " " +tVal3 + " " + tVal2 + " " + tVal1 + " " + tVal0;
-          stringout = stringout + RiWend + "  F: " + Fahrstufe;
-          Serial.println(stringout);
+         
           
 }
+
+void transmit(){
+    // Datenformat: X,X,RiWend [N,V,R],Fahrstufe [A..Q],Li_V [0,1],Schluss_V [0,1], _
+    //                Li_H [0,1], Schluss_H [0,1], Li_F [0,1], L [0,1], P [0,1],S,S
+    stringTX = "X,X,";
+    stringTX = stringTX + RiWend + "," + Fahrstufe + "," + Li_V + "," + Schluss_V + "," + Li_H + "," + Schluss_H + "," + Li_F + "," + L + "," + P + ",S,S"; 
+    Serial.println(stringTX);
+}
+
 
 void read_Fahrschalter(){
     tFst = 0;
@@ -179,65 +211,81 @@ void read_Fahrschalter(){
     if (tVal > 25) {
         tFst = tFst + 16;
     }    
-    
+     
+   switch(tFst){
     // Neutral
-    if (tFst == 0) {
-      Fahrstufe = 'F';
-    }
+    case 0:
+    Fahrstufe = 'F';
+    break;
     // Fahrstufen
-    else if (tFst == 1){
-      Fahrstufe = 'G';
-    }
-    else if (tFst == 3){
-      Fahrstufe = 'H';
-    }
-    else if (tFst == 2){
-      Fahrstufe = 'I';
-    }
-    else if (tFst == 6){
-      Fahrstufe = 'J';
-    }
-    else if (tFst == 7){
-      Fahrstufe = 'K';
-    }
-    else if (tFst == 5){
-      Fahrstufe = 'L';
-    }
-    else if (tFst == 4){
-      Fahrstufe = 'M';
-    }
-     else if (tFst == 12){
-      Fahrstufe = 'N';
-    }
-    else if (tFst == 13){
-      Fahrstufe = 'O';
-    }
-    else if (tFst == 15){
-      Fahrstufe = 'P';
-    }
-    else if (tFst == 14){
-      Fahrstufe = 'Q';
-    }
-    
+    case 1:
+    Fahrstufe = 'G';
+    break;
+    case 3:
+    Fahrstufe = 'H';
+    break;
+
+    case 2:
+    Fahrstufe = 'I';
+    break;
+
+    case 6:
+    Fahrstufe = 'J';
+    break;
+
+    case 7:
+    Fahrstufe = 'K';
+    break;
+
+    case 5:
+    Fahrstufe = 'L';
+    break;
+
+    case 4:
+    Fahrstufe = 'M';
+    break;
+
+    case 12:
+    Fahrstufe = 'N';
+    break;
+
+    case 13:
+    Fahrstufe = 'O';
+    break;
+
+    case 15:
+    Fahrstufe = 'P';
+    break;
+
+    case 14:
+    Fahrstufe = 'Q';
+    break;
+
     // Bremsstufen
-    else if (tFst == 16){
-      Fahrstufe = 'E';
-    }
-    else if (tFst == 17){
-      Fahrstufe = 'D';
-    }
-    else if (tFst == 19){
-      Fahrstufe = 'C';
-    }
-    else if (tFst == 18){
-      Fahrstufe = 'B';
-    }
-    else if (tFst == 22){
-      Fahrstufe = 'A';
-    }
-    else { 
-      Fahrstufe = 'F';
-    }
+    case 16:
+    Fahrstufe = 'E';
+    break;
+
+    case 17:
+    Fahrstufe = 'D';
+    break;
+
+    case 19:
+    Fahrstufe = 'C';
+    break;
+
+    case 18:
+    Fahrstufe = 'B';
+    break;
+
+    case 22:
+    Fahrstufe = 'A';
+    break;
+
+    default:
+    Fahrstufe = 'F';
+    break;
+   }
 }
 
 void read_Licht(){
@@ -271,12 +319,12 @@ void read_Licht(){
     Schluss_H = 0;
   }
   
-  tVal = digitalRead(11);  
-  if (tVal = LOW) {
-    Li_F = 0;
+  
+  if (digitalRead(Licht_F) == LOW) {
+    Li_F = 1;
   }
   else {
-    Li_F = 1;
+    Li_F = 0;
   }
   /*
   String stringout1 = "Li_V: ";
